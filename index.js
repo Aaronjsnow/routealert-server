@@ -18,6 +18,7 @@ async function initDB() {
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS route_stats (
+        hands_free BOOLEAN DEFAULT FALSE,
         id SERIAL PRIMARY KEY,
         date DATE NOT NULL,
         total_stops INTEGER NOT NULL,
@@ -95,11 +96,11 @@ app.post('/scan', async (req, res) => {
 // Save route stats
 app.post('/stats', async (req, res) => {
   try {
-    const { date, total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages } = req.body;
+    const { date, total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages, hands_free } = req.body;
     if (total_stops === undefined) return res.status(400).json({ error: 'Missing fields' });
     await pool.query(
-      `INSERT INTO route_stats (date, total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [date || new Date().toISOString().split('T')[0], total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages]
+      `INSERT INTO route_stats (date, total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages, hands_free) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [date || new Date().toISOString().split('T')[0], total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages, hands_free || false]
     );
     res.json({ success: true });
   } catch (err) {
