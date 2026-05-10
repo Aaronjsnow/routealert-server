@@ -1,12 +1,43 @@
 const express = require('express');
 const cors = require('cors');
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+const { Pool } = require('pg');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+
+// PostgreSQL connection
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
+// Create stats table if it doesn't exist
+async function initDB() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS route_stats (
+        id SERIAL PRIMARY KEY,
+        date DATE NOT NULL,
+        total_stops INTEGER NOT NULL,
+        total_packages INTEGER NOT NULL,
+        mailbox_count INTEGER NOT NULL,
+        mailbox_packages INTEGER NOT NULL,
+        door_count INTEGER NOT NULL,
+        door_packages INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    console.log('Database initialized successfully');
+  } catch (err) {
+    console.error('Database init error:', err);
+  }
+}
+
+initDB();
 
 // Health check
 app.get('/', (req, res) => {
@@ -54,7 +85,6 @@ app.post('/scan', async (req, res) => {
     const match = raw.match(/\[[\s\S]*\]/);
     const parsed = JSON.parse(match ? match[0] : '[]');
 
-    // Filter out pickups
     const filtered = parsed.filter(item => {
       if (item.pickup === true) return false;
       const text = (typeof item === 'string' ? item : item.address) || '';
@@ -68,14 +98,45 @@ app.post('/scan', async (req, res) => {
   }
 });
 
-// Save mailbox location
+// Save route stats
+app.post('/stats', async (req, res) => {
+  try {
+    const { date, total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages } = req.body;
+    if (total_stops === undefined) return res.status(400).json({ error: 'Missing required stats fields' });
+    await pool.query(
+      `INSERT INTO route_stats (date, total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [date || new Date().toISOString().split('T')[0], total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Save stats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get route stats history
+app.get('/stats', async (req, res) => {
+  try {
+    const { period } = req.query;
+    let query = `SELECT * FROM route_stats ORDER BY date DESC`;
+    if (period === 'week') query = `SELECT * FROM route_stats WHERE date >= NOW() - INTERVAL '7 days' ORDER BY date DESC`;
+    else if (period === 'month') query = `SELECT * FROM route_stats WHERE date >= NOW() - INTERVAL '30 days' ORDER BY date DESC`;
+    else if (period === 'year') query = `SELECT * FROM route_stats WHERE date >= NOW() - INTERVAL '365 days' ORDER BY date DESC`;
+    const result = await pool.query(query);
+    res.json({ stats: result.rows });
+  } catch (err) {
+    console.error('Get stats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// In-memory mailbox store (temporary)
+const mailboxLocations = {};
+
 app.post('/mailbox', async (req, res) => {
   try {
     const { address, lat, lng } = req.body;
-    if (!address || !lat || !lng) {
-      return res.status(400).json({ error: 'Missing address, lat, or lng' });
-    }
-    // Store in memory for now (will add database later)
+    if (!address || !lat || !lng) return res.status(400).json({ error: 'Missing fields' });
     mailboxLocations[address.toLowerCase().trim()] = { lat, lng };
     res.json({ success: true });
   } catch (err) {
@@ -83,7 +144,6 @@ app.post('/mailbox', async (req, res) => {
   }
 });
 
-// Get mailbox location
 app.get('/mailbox', async (req, res) => {
   try {
     const { address } = req.query;
@@ -95,9 +155,6 @@ app.get('/mailbox', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-// In-memory mailbox store (temporary until we add a database)
-const mailboxLocations = {};
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`RouteAlert server running on port ${PORT}`));
