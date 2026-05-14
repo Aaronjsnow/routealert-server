@@ -197,30 +197,63 @@ app.get('/mailbox', async (req, res) => {
   }
 });
 
-// Geocode address via Nominatim
+// Geocode address via Nominatim with fallback attempts
 app.get('/geocode', async (req, res) => {
   try {
     const { address, zip } = req.query;
     if (!address) return res.status(400).json({ error: 'Missing address' });
-    const query = zip ? `${address}, ${zip}` : address;
-    const encoded = encodeURIComponent(query);
-    const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=5&addressdetails=1`;
-    const response = await fetch(url, {
-      headers: { 'User-Agent': 'RouteAlert/1.0 (delivery route app)' }
-    });
-    const results = await response.json();
-    if (!results || !results.length) return res.status(404).json({ error: 'Not found' });
 
-    // Filter by zip if provided
-    let best = null;
-    if (zip) {
-      best = results.find(item => {
-        const postcode = item.address?.postcode?.replace(/\s/g, '') || '';
-        return postcode.startsWith(zip);
-      });
+    // Expand abbreviations for better matching
+    function expandAddress(addr) {
+      return addr
+        .replace(/\bRd\b/gi, 'Road').replace(/\bSt\b/gi, 'Street')
+        .replace(/\bAve\b/gi, 'Avenue').replace(/\bDr\b/gi, 'Drive')
+        .replace(/\bLn\b/gi, 'Lane').replace(/\bCt\b/gi, 'Court')
+        .replace(/\bBlvd\b/gi, 'Boulevard').replace(/\bPl\b/gi, 'Place')
+        .replace(/\bCir\b/gi, 'Circle').replace(/\bTer\b/gi, 'Terrace')
+        .replace(/\bHwy\b/gi, 'Highway').replace(/\bPkwy\b/gi, 'Parkway')
+        .replace(/\bRun\b/gi, 'Run');
     }
-    if (!best) best = results[0];
 
+    // Build list of queries to try in order
+    const queries = [];
+    if (zip) {
+      queries.push(`${address}, ${zip}`);           // original + zip
+      queries.push(`${expandAddress(address)}, ${zip}`); // expanded + zip
+      queries.push(`${address}, MA ${zip}`);        // with state
+    }
+    queries.push(expandAddress(address));            // expanded no zip
+    queries.push(address);                           // original no zip
+
+    async function tryQuery(query) {
+      const encoded = encodeURIComponent(query);
+      const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=5&addressdetails=1`;
+      const response = await fetch(url, {
+        headers: { 'User-Agent': 'RouteAlert/1.0 (delivery route app)' }
+      });
+      const results = await response.json();
+      if (!results || !results.length) return null;
+
+      // Prefer results matching the zip
+      if (zip) {
+        const zipMatch = results.find(item => {
+          const postcode = item.address?.postcode?.replace(/\s/g, '') || '';
+          return postcode.startsWith(zip);
+        });
+        if (zipMatch) return zipMatch;
+      }
+      return results[0];
+    }
+
+    let best = null;
+    for (const query of queries) {
+      best = await tryQuery(query);
+      if (best) break;
+      // Small delay to avoid rate limiting
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    if (!best) return res.status(404).json({ error: 'Address not found' });
     res.json({ lat: parseFloat(best.lat), lng: parseFloat(best.lon) });
   } catch (err) {
     console.error('Geocode error:', err);
