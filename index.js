@@ -197,5 +197,36 @@ app.get('/mailbox', async (req, res) => {
   }
 });
 
+// Geocode address via Nominatim
+app.get('/geocode', async (req, res) => {
+  try {
+    const { address, zip } = req.query;
+    if (!address) return res.status(400).json({ error: 'Missing address' });
+    const query = zip ? `${address}, ${zip}` : address;
+    const encoded = encodeURIComponent(query);
+    const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=5&addressdetails=1`;
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'RouteAlert/1.0 (delivery route app)' }
+    });
+    const results = await response.json();
+    if (!results || !results.length) return res.status(404).json({ error: 'Not found' });
+
+    // Filter by zip if provided
+    let best = null;
+    if (zip) {
+      best = results.find(item => {
+        const postcode = item.address?.postcode?.replace(/\s/g, '') || '';
+        return postcode.startsWith(zip);
+      });
+    }
+    if (!best) best = results[0];
+
+    res.json({ lat: parseFloat(best.lat), lng: parseFloat(best.lon) });
+  } catch (err) {
+    console.error('Geocode error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`RouteAlert server running on port ${PORT}`));
