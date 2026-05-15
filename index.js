@@ -197,7 +197,16 @@ app.get('/mailbox', async (req, res) => {
   }
 });
 
-// Geocode address via Nominatim with fallback attempts
+// Delete a route from history
+app.delete('/stats/:id', async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM route_stats WHERE id = $1`, [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete stats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 app.get('/geocode', async (req, res) => {
   try {
     const { address, zip } = req.query;
