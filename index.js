@@ -34,8 +34,13 @@ async function initDB() {
       CREATE TABLE IF NOT EXISTS long_driveways (
         id SERIAL PRIMARY KEY,
         address TEXT NOT NULL UNIQUE,
+        radius_feet INTEGER NOT NULL DEFAULT 850,
         created_at TIMESTAMP DEFAULT NOW()
       )
+    `);
+    // Add radius_feet column if it doesn't exist (for existing tables)
+    await pool.query(`
+      ALTER TABLE long_driveways ADD COLUMN IF NOT EXISTS radius_feet INTEGER NOT NULL DEFAULT 850
     `);
     console.log('Database initialized successfully');
   } catch (err) {
@@ -130,11 +135,27 @@ app.post('/driveway', async (req, res) => {
     const { address } = req.body;
     if (!address) return res.status(400).json({ error: 'Missing address' });
     const normalized = normalizeAddress(address);
+
+    // Check if already exists
+    const existing = await pool.query(`SELECT id, radius_feet FROM long_driveways WHERE address = $1`, [normalized]);
+
+    if (existing.rows.length > 0) {
+      const current = existing.rows[0].radius_feet;
+      if (current >= 1250) {
+        return res.json({ success: true, normalized, radius_feet: current, maxReached: true });
+      }
+      // Extend by 400 ft
+      const newRadius = current + 400;
+      await pool.query(`UPDATE long_driveways SET radius_feet = $1 WHERE address = $2`, [newRadius, normalized]);
+      return res.json({ success: true, normalized, radius_feet: newRadius, extended: true });
+    }
+
+    // New entry at 850 ft
     await pool.query(
-      `INSERT INTO long_driveways (address) VALUES ($1) ON CONFLICT (address) DO NOTHING`,
+      `INSERT INTO long_driveways (address, radius_feet) VALUES ($1, 850)`,
       [normalized]
     );
-    res.json({ success: true, normalized });
+    res.json({ success: true, normalized, radius_feet: 850 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -156,8 +177,12 @@ app.get('/driveway/check', async (req, res) => {
     const { address } = req.query;
     if (!address) return res.status(400).json({ error: 'Missing address' });
     const normalized = normalizeAddress(address);
-    const result = await pool.query(`SELECT id FROM long_driveways WHERE address = $1`, [normalized]);
-    res.json({ isLongDriveway: result.rows.length > 0 });
+    const result = await pool.query(`SELECT id, radius_feet FROM long_driveways WHERE address = $1`, [normalized]);
+    if (result.rows.length > 0) {
+      res.json({ isLongDriveway: true, radius_feet: result.rows[0].radius_feet });
+    } else {
+      res.json({ isLongDriveway: false, radius_feet: null });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
