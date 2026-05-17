@@ -31,6 +31,15 @@ async function initDB() {
       )
     `);
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS geocode_cache (
+        id SERIAL PRIMARY KEY,
+        address TEXT NOT NULL UNIQUE,
+        lat DOUBLE PRECISION NOT NULL,
+        lng DOUBLE PRECISION NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS long_driveways (
         id SERIAL PRIMARY KEY,
         address TEXT NOT NULL UNIQUE,
@@ -241,10 +250,23 @@ app.get('/geocode', async (req, res) => {
     const { address, zip } = req.query;
     if (!address) return res.status(400).json({ error: 'Missing address' });
 
-    // Check cache first
+    // Normalize the cache key
     const cacheKey = `${address.toLowerCase().trim()}|${zip || ''}`;
+
+    // 1. Check in-memory cache first (fastest)
     if (geocodeCache.has(cacheKey)) {
       return res.json(geocodeCache.get(cacheKey));
+    }
+
+    // 2. Check PostgreSQL cache (persistent across restarts)
+    const cached = await pool.query(
+      `SELECT lat, lng FROM geocode_cache WHERE address = $1`,
+      [cacheKey]
+    );
+    if (cached.rows.length > 0) {
+      const result = { lat: cached.rows[0].lat, lng: cached.rows[0].lng };
+      geocodeCache.set(cacheKey, result); // warm in-memory cache too
+      return res.json(result);
     }
 
     // Expand abbreviations for better matching
@@ -318,7 +340,16 @@ app.get('/geocode', async (req, res) => {
 
     if (!best) return res.status(404).json({ error: 'Address not found' });
     const result = { lat: parseFloat(best.lat), lng: parseFloat(best.lon) };
+
+    // Save to in-memory cache
     geocodeCache.set(cacheKey, result);
+
+    // Save to PostgreSQL cache (fire and forget)
+    pool.query(
+      `INSERT INTO geocode_cache (address, lat, lng) VALUES ($1, $2, $3) ON CONFLICT (address) DO NOTHING`,
+      [cacheKey, result.lat, result.lng]
+    ).catch(err => console.error('Cache save error:', err));
+
     res.json(result);
   } catch (err) {
     console.error('Geocode error:', err);
