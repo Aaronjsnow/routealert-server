@@ -232,10 +232,20 @@ app.delete('/stats/:id', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Geocode cache to avoid re-requesting the same addresses
+const geocodeCache = new Map();
+
 app.get('/geocode', async (req, res) => {
   try {
     const { address, zip } = req.query;
     if (!address) return res.status(400).json({ error: 'Missing address' });
+
+    // Check cache first
+    const cacheKey = `${address.toLowerCase().trim()}|${zip || ''}`;
+    if (geocodeCache.has(cacheKey)) {
+      return res.json(geocodeCache.get(cacheKey));
+    }
 
     // Expand abbreviations for better matching
     function expandAddress(addr) {
@@ -263,9 +273,28 @@ app.get('/geocode', async (req, res) => {
       const encoded = encodeURIComponent(query);
       const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=5&addressdetails=1`;
       const response = await fetch(url, {
-        headers: { 'User-Agent': 'RouteAlert/1.0 (delivery route app)' }
+        headers: { 
+          'User-Agent': 'RouteAlert/1.0 (routealert delivery app)',
+          'Accept': 'application/json'
+        }
       });
-      const results = await response.json();
+      
+      // Check content type before parsing
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        console.log(`Nominatim returned non-JSON for query: ${query}, status: ${response.status}`);
+        return null;
+      }
+      
+      const text = await response.text();
+      let results;
+      try {
+        results = JSON.parse(text);
+      } catch (e) {
+        console.log(`Failed to parse Nominatim response: ${text.substring(0, 100)}`);
+        return null;
+      }
+      
       if (!results || !results.length) return null;
 
       // Prefer results matching the zip
@@ -283,12 +312,14 @@ app.get('/geocode', async (req, res) => {
     for (const query of queries) {
       best = await tryQuery(query);
       if (best) break;
-      // Small delay to avoid rate limiting
-      await new Promise(r => setTimeout(r, 200));
+      // Wait 1 second between attempts to respect Nominatim rate limit
+      await new Promise(r => setTimeout(r, 1000));
     }
 
     if (!best) return res.status(404).json({ error: 'Address not found' });
-    res.json({ lat: parseFloat(best.lat), lng: parseFloat(best.lon) });
+    const result = { lat: parseFloat(best.lat), lng: parseFloat(best.lon) };
+    geocodeCache.set(cacheKey, result);
+    res.json(result);
   } catch (err) {
     console.error('Geocode error:', err);
     res.status(500).json({ error: err.message });
