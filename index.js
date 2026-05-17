@@ -86,7 +86,24 @@ app.post('/scan', async (req, res) => {
         model: 'claude-haiku-4-5-20251001', max_tokens: 2000,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: mediaType, data: image } },
-          { type: 'text', text: `Look at this image carefully. It contains a delivery route sheet or manifest.\n\nExtract every row with a street address, top to bottom, in order.\n\nFor each row:\n1. "address" — street number + name (e.g. "5 ORCUTTVILLE RD")\n2. "qty" — number in the column DIRECTLY LEFT of the address (package count)\n3. "pickup" — true if the word "pickup" appears anywhere near that row, otherwise false\n\nOutput ONLY a raw JSON array of objects. No markdown, no explanation.\n\nExample: [{"address":"5 Orcuttville Rd","qty":3,"pickup":false}]\n\nIf no addresses: []` }
+          { type: 'text', text: `Look at this image carefully. It contains a USPS delivery route manifest on a scanner screen.
+
+The columns from left to right are: [icon] [sequence number] [package count] [address]
+
+Extract every row with a street address, top to bottom, in order.
+
+For each row:
+1. "address" — street number + name only (e.g. "73 CHAFFEE RD"). Do not include any numbers that are part of the columns.
+2. "qty" — the number in the column DIRECTLY AND IMMEDIATELY to the left of the address text. This is the LAST number before the address starts. Do NOT use the first or second number from the left — only the number immediately adjacent to the address.
+3. "pickup" — true if the word "pickup" appears anywhere near that row, otherwise false
+
+Output ONLY a raw JSON array of objects. No markdown, no explanation.
+
+Example for a row showing: [icon] 6 1 73 CHAFFEE RD
+Correct output: {"address":"73 CHAFFEE RD","qty":1,"pickup":false}
+The qty is 1, NOT 6.
+
+If no addresses found: []` }
         ]}]
       })
     });
