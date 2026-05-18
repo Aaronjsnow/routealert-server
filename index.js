@@ -261,6 +261,7 @@ app.delete('/stats/:id', async (req, res) => {
 
 // Geocode cache to avoid re-requesting the same addresses
 const geocodeCache = new Map();
+const GEOCODIO_API_KEY = '2162617987bb9872ba00012a22928909629a223';
 
 app.get('/geocode', async (req, res) => {
   try {
@@ -282,86 +283,28 @@ app.get('/geocode', async (req, res) => {
     );
     if (cached.rows.length > 0) {
       const result = { lat: cached.rows[0].lat, lng: cached.rows[0].lng };
-      geocodeCache.set(cacheKey, result); // warm in-memory cache too
+      geocodeCache.set(cacheKey, result);
       return res.json(result);
     }
 
-    // Expand abbreviations for better matching
-    function expandAddress(addr) {
-      return addr
-        .replace(/\bRd\b/gi, 'Road').replace(/\bSt\b/gi, 'Street')
-        .replace(/\bAve\b/gi, 'Avenue').replace(/\bDr\b/gi, 'Drive')
-        .replace(/\bLn\b/gi, 'Lane').replace(/\bCt\b/gi, 'Court')
-        .replace(/\bBlvd\b/gi, 'Boulevard').replace(/\bPl\b/gi, 'Place')
-        .replace(/\bCir\b/gi, 'Circle').replace(/\bTer\b/gi, 'Terrace')
-        .replace(/\bHwy\b/gi, 'Highway').replace(/\bPkwy\b/gi, 'Parkway')
-        .replace(/\bRun\b/gi, 'Run');
+    // 3. Call Geocodio API
+    const query = zip ? `${address}, ${zip}` : address;
+    const encoded = encodeURIComponent(query);
+    const url = `https://api.geocod.io/v1.12/geocode?q=${encoded}&api_key=${GEOCODIO_API_KEY}&limit=1`;
+
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (!data.results || data.results.length === 0) {
+      console.log(`Geocodio: no results for "${query}"`);
+      return res.status(404).json({ error: 'Address not found' });
     }
 
-    // Build list of queries to try in order
-    const queries = [];
-    if (zip) {
-      queries.push(`${address}, ${zip}`);           // original + zip
-      queries.push(`${expandAddress(address)}, ${zip}`); // expanded + zip
-      queries.push(`${address}, MA ${zip}`);        // with state
-    }
-    queries.push(expandAddress(address));            // expanded no zip
-    queries.push(address);                           // original no zip
+    const loc = data.results[0].location;
+    const result = { lat: loc.lat, lng: loc.lng };
 
-    async function tryQuery(query) {
-      const encoded = encodeURIComponent(query);
-      const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=5&addressdetails=1`;
-      const response = await fetch(url, {
-        headers: { 
-          'User-Agent': 'RouteAlert/1.0 (routealert delivery app)',
-          'Accept': 'application/json'
-        }
-      });
-      
-      // Check content type before parsing
-      const contentType = response.headers.get('content-type') || '';
-      if (!contentType.includes('application/json')) {
-        console.log(`Nominatim returned non-JSON for query: ${query}, status: ${response.status}`);
-        return null;
-      }
-      
-      const text = await response.text();
-      let results;
-      try {
-        results = JSON.parse(text);
-      } catch (e) {
-        console.log(`Failed to parse Nominatim response: ${text.substring(0, 100)}`);
-        return null;
-      }
-      
-      if (!results || !results.length) return null;
-
-      // Prefer results matching the zip
-      if (zip) {
-        const zipMatch = results.find(item => {
-          const postcode = item.address?.postcode?.replace(/\s/g, '') || '';
-          return postcode.startsWith(zip);
-        });
-        if (zipMatch) return zipMatch;
-      }
-      return results[0];
-    }
-
-    let best = null;
-    for (const query of queries) {
-      best = await tryQuery(query);
-      if (best) break;
-      // Wait 1 second between attempts to respect Nominatim rate limit
-      await new Promise(r => setTimeout(r, 1000));
-    }
-
-    if (!best) return res.status(404).json({ error: 'Address not found' });
-    const result = { lat: parseFloat(best.lat), lng: parseFloat(best.lon) };
-
-    // Save to in-memory cache
+    // Save to both caches
     geocodeCache.set(cacheKey, result);
-
-    // Save to PostgreSQL cache (fire and forget)
     pool.query(
       `INSERT INTO geocode_cache (address, lat, lng) VALUES ($1, $2, $3) ON CONFLICT (address) DO NOTHING`,
       [cacheKey, result.lat, result.lng]
