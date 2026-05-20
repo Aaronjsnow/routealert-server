@@ -167,7 +167,7 @@ app.post('/driveway', async (req, res) => {
 
     if (existing.rows.length > 0) {
       const current = existing.rows[0].radius_feet;
-      if (current >= 1250) {
+      if (current >= 2000) {
         return res.json({ success: true, normalized, radius_feet: current, maxReached: true });
       }
       // Extend by 400 ft
