@@ -40,16 +40,13 @@ async function initDB() {
       )
     `);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS long_driveways (
+      CREATE TABLE IF NOT EXISTS mailbox_pins (
         id SERIAL PRIMARY KEY,
         address TEXT NOT NULL UNIQUE,
-        radius_feet INTEGER NOT NULL DEFAULT 850,
+        lat DOUBLE PRECISION NOT NULL,
+        lng DOUBLE PRECISION NOT NULL,
         created_at TIMESTAMP DEFAULT NOW()
       )
-    `);
-    // Add radius_feet column if it doesn't exist (for existing tables)
-    await pool.query(`
-      ALTER TABLE long_driveways ADD COLUMN IF NOT EXISTS radius_feet INTEGER NOT NULL DEFAULT 850
     `);
     console.log('Database initialized successfully');
   } catch (err) {
@@ -156,68 +153,38 @@ app.get('/stats', async (req, res) => {
 });
 
 // Add long driveway
-app.post('/driveway', async (req, res) => {
+// Save mailbox pin
+app.post('/mailboxpin', async (req, res) => {
   try {
-    const { address } = req.body;
-    if (!address) return res.status(400).json({ error: 'Missing address' });
+    const { address, lat, lng } = req.body;
+    if (!address || lat == null || lng == null) return res.status(400).json({ error: 'Missing fields' });
     const normalized = normalizeAddress(address);
-
-    // Check if already exists
-    const existing = await pool.query(`SELECT id, radius_feet FROM long_driveways WHERE address = $1`, [normalized]);
-
-    if (existing.rows.length > 0) {
-      const current = existing.rows[0].radius_feet;
-      if (current >= 2000) {
-        return res.json({ success: true, normalized, radius_feet: current, maxReached: true });
-      }
-      // Extend by 400 ft
-      const newRadius = current + 400;
-      await pool.query(`UPDATE long_driveways SET radius_feet = $1 WHERE address = $2`, [newRadius, normalized]);
-      return res.json({ success: true, normalized, radius_feet: newRadius, extended: true });
-    }
-
-    // New entry at 850 ft
     await pool.query(
-      `INSERT INTO long_driveways (address, radius_feet) VALUES ($1, 850)`,
-      [normalized]
+      `INSERT INTO mailbox_pins (address, lat, lng)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (address) DO UPDATE SET lat = $2, lng = $3`,
+      [normalized, lat, lng]
     );
-    res.json({ success: true, normalized, radius_feet: 850 });
+    res.json({ success: true, normalized, lat, lng });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Get all long driveways
-app.get('/driveway', async (req, res) => {
+// Get all mailbox pins
+app.get('/mailboxpin', async (req, res) => {
   try {
-    const result = await pool.query(`SELECT * FROM long_driveways ORDER BY address ASC`);
-    res.json({ driveways: result.rows });
+    const result = await pool.query(`SELECT * FROM mailbox_pins ORDER BY address ASC`);
+    res.json({ pins: result.rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Check if address is a long driveway
-app.get('/driveway/check', async (req, res) => {
+// Delete mailbox pin
+app.delete('/mailboxpin/:id', async (req, res) => {
   try {
-    const { address } = req.query;
-    if (!address) return res.status(400).json({ error: 'Missing address' });
-    const normalized = normalizeAddress(address);
-    const result = await pool.query(`SELECT id, radius_feet FROM long_driveways WHERE address = $1`, [normalized]);
-    if (result.rows.length > 0) {
-      res.json({ isLongDriveway: true, radius_feet: result.rows[0].radius_feet });
-    } else {
-      res.json({ isLongDriveway: false, radius_feet: null });
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Delete long driveway
-app.delete('/driveway/:id', async (req, res) => {
-  try {
-    await pool.query(`DELETE FROM long_driveways WHERE id = $1`, [req.params.id]);
+    await pool.query(`DELETE FROM mailbox_pins WHERE id = $1`, [req.params.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -259,7 +226,93 @@ app.delete('/stats/:id', async (req, res) => {
   }
 });
 
-// Geocode cache to avoid re-requesting the same addresses
+// Privacy Policy
+app.get('/privacy', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RouteAlert Privacy Policy</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f7; color: #1d1d1f; line-height: 1.7; }
+  .container { max-width: 760px; margin: 0 auto; padding: 48px 24px; }
+  .header { text-align: center; margin-bottom: 48px; }
+  .logo { font-size: 48px; margin-bottom: 12px; }
+  h1 { font-size: 32px; font-weight: 700; color: #1d1d1f; margin-bottom: 8px; }
+  .subtitle { color: #6e6e73; font-size: 15px; }
+  .card { background: white; border-radius: 18px; padding: 32px; margin-bottom: 20px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+  h2 { font-size: 20px; font-weight: 600; color: #1d1d1f; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
+  h2 .icon { font-size: 22px; }
+  p { color: #3a3a3c; margin-bottom: 12px; font-size: 15px; }
+  p:last-child { margin-bottom: 0; }
+  ul { color: #3a3a3c; padding-left: 20px; margin-bottom: 12px; font-size: 15px; }
+  li { margin-bottom: 8px; }
+  .highlight { background: #f2f7ff; border-left: 4px solid #3b82f6; border-radius: 0 8px 8px 0; padding: 16px 20px; margin: 16px 0; }
+  .highlight p { color: #1d4ed8; margin: 0; font-weight: 500; }
+  .effective { text-align: center; color: #6e6e73; font-size: 13px; margin-top: 40px; padding-top: 24px; border-top: 1px solid #e5e5ea; }
+  a { color: #3b82f6; text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="logo">📦</div>
+    <h1>RouteAlert Privacy Policy</h1>
+    <p class="subtitle">Last updated: May 19, 2026</p>
+  </div>
+  <div class="card">
+    <h2><span class="icon">👋</span> Overview</h2>
+    <p>RouteAlert is a delivery route management tool designed for USPS carriers. We are committed to protecting your privacy and being transparent about how we handle your data.</p>
+    <div class="highlight"><p>RouteAlert does not sell your personal information to third parties. Ever.</p></div>
+  </div>
+  <div class="card">
+    <h2><span class="icon">📍</span> Location Data</h2>
+    <p>RouteAlert uses your device's GPS to provide proximity alerts as you approach delivery stops.</p>
+    <ul>
+      <li>Your location is processed entirely on your device — it is never transmitted to our servers.</li>
+      <li>We request "Always Allow" location permission so the app can track your route when your screen is off.</li>
+      <li>You can revoke location access at any time in iOS Settings.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h2><span class="icon">📷</span> Camera &amp; Photos</h2>
+    <p>Photos you take or select are sent to our secure server for AI processing to extract delivery addresses. Images are transmitted securely and are not stored after processing.</p>
+  </div>
+  <div class="card">
+    <h2><span class="icon">🗄️</span> Data We Store</h2>
+    <ul>
+      <li><strong>Route statistics</strong> — stops, packages, delivery type, and date. Not linked to your identity.</li>
+      <li><strong>Long driveway addresses</strong> — addresses marked as long driveways.</li>
+      <li><strong>Geocoded coordinates</strong> — cached address coordinates to improve performance.</li>
+    </ul>
+    <p>None of this data is linked to your name, Apple ID, or any personal identifier.</p>
+  </div>
+  <div class="card">
+    <h2><span class="icon">🤝</span> Third-Party Services</h2>
+    <ul>
+      <li><strong>Anthropic Claude</strong> — AI model for address extraction. Images not retained. <a href="https://www.anthropic.com/privacy">Privacy Policy</a>.</li>
+      <li><strong>Geocodio</strong> — Address geocoding. Only street addresses sent. <a href="https://www.geocod.io/privacy-policy/">Privacy Policy</a>.</li>
+      <li><strong>Railway</strong> — Server infrastructure, US-based. <a href="https://railway.app/legal/privacy">Privacy Policy</a>.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h2><span class="icon">👶</span> Children's Privacy</h2>
+    <p>RouteAlert is intended for adults in a professional delivery capacity. We do not knowingly collect information from children under 13.</p>
+  </div>
+  <div class="card">
+    <h2><span class="icon">📬</span> Contact</h2>
+    <p>Questions? Contact <strong>Aaron Snow</strong>, Developer of RouteAlert.<br>
+    Email: <a href="mailto:snowaaronj@gmail.com">snowaaronj@gmail.com</a></p>
+  </div>
+  <p class="effective">Effective May 19, 2026</p>
+</div>
+</body>
+</html>`);
+});
+
+
 const geocodeCache = new Map();
 const GEOCODIO_API_KEY = '2162617987bb9872ba00012a22928909629a223';
 
