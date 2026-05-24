@@ -133,20 +133,17 @@ app.post('/scanmanifest', async (req, res) => {
         model: 'claude-haiku-4-5-20251001', max_tokens: 2000,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: mediaType, data: image } },
-          { type: 'text', text: `You are parsing a USPS delivery manifest. Extract delivery stops as structured JSON.
+          { type: 'text', text: `You are parsing a USPS delivery manifest. Extract every address line as structured JSON. Do NOT deduplicate — if an address appears 3 times, return it 3 times.
 
-CRITICAL RULES:
-1. IGNORE ALL NUMBERS on each row — there may be a stop number, sequence number, or other numbers on the left side of each row. Ignore every single number. They are never package counts.
-2. The ONLY way to determine package count is if the SAME ADDRESS appears MORE THAN ONCE in the list. If an address appears once, packageCount is 1. If it appears twice, packageCount is 2. That is the ONLY rule for package count.
-3. IGNORE any text after the address such as delivery notes or instructions.
-4. Include apartment, unit, or suite numbers as part of streetAddress.
-5. City, state, and ZIP flow downward. The first line of the manifest always includes city/state/zip. Each city/state/zip applies to that address and all addresses below it until the next city/state/zip appears. Never look upward — process strictly top to bottom.
-6. Normalize addresses to title case (e.g. "103 Boyer Rd").
-7. De-duplicate addresses and sum their package counts.
-8. If the page is partially visible, extract what you can see.
+RULES:
+1. IGNORE ALL NUMBERS on each row. There may be stop numbers or sequence numbers — ignore every number you see. They are never package counts.
+2. Extract ONLY the street address text. Ignore any notes or instructions after the address.
+3. Include apartment, unit, or suite numbers as part of streetAddress.
+4. City, state, and ZIP flow downward. The first line always includes city/state/zip. Each city/state/zip applies to that row and all rows below it until the next city/state/zip appears. Never look upward.
+5. Normalize addresses to title case (e.g. "103 Boyer Rd").
 
-Return ONLY a JSON array, no explanation, no markdown:
-[{"streetAddress":"103 Boyer Rd","city":"Tolland","state":"CT","zip":"06084","packageCount":2}]` }
+Return ONLY a JSON array with one entry per row, no deduplication, no explanation, no markdown:
+[{"streetAddress":"103 Boyer Rd","city":"Tolland","state":"CT","zip":"06084"},{"streetAddress":"103 Boyer Rd","city":"Tolland","state":"CT","zip":"06084"},{"streetAddress":"12 Elm Ave","city":"Tolland","state":"CT","zip":"06084"}]` }
         ]}]
       })
     });
@@ -156,17 +153,41 @@ Return ONLY a JSON array, no explanation, no markdown:
     const match = raw.match(/\[[\s\S]*\]/);
     const parsed = JSON.parse(match ? match[0] : '[]');
 
-    // Convert to RouteAlert address format
-    const addresses = parsed.map(item => {
-      const parts = [item.streetAddress, item.city, item.state, item.zip].filter(Boolean);
-      return {
-        address: item.streetAddress,
-        qty: item.packageCount || 1,
-        pickup: false,
-        city: item.city || null,
-        state: item.state || null,
-        zip: item.zip || null
-      };
+    // IGNORE Claude's packageCount entirely — count duplicates ourselves
+    // First pass: collect all addresses in order (before dedup)
+    const addressList = parsed.map(item => ({
+      streetAddress: (item.streetAddress || '').trim(),
+      city: item.city || null,
+      state: item.state || null,
+      zip: item.zip || null
+    }));
+
+    // Second pass: count true duplicates by counting occurrences
+    const countMap = {};
+    const cityMap = {};
+    addressList.forEach(item => {
+      const key = item.streetAddress.toLowerCase();
+      countMap[key] = (countMap[key] || 0) + 1;
+      if (item.city) cityMap[key] = { city: item.city, state: item.state, zip: item.zip };
+    });
+
+    // Third pass: deduplicate and build final list in order
+    const seen = new Set();
+    const addresses = [];
+    addressList.forEach(item => {
+      const key = item.streetAddress.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        const location = cityMap[key] || { city: item.city, state: item.state, zip: item.zip };
+        addresses.push({
+          address: item.streetAddress,
+          qty: countMap[key],
+          pickup: false,
+          city: location.city,
+          state: location.state,
+          zip: location.zip
+        });
+      }
     });
 
     res.json({ addresses });
