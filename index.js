@@ -72,10 +72,12 @@ async function initDB() {
 }
 
 const DAILY_SCAN_LIMIT = 25;
+const UNLIMITED_USERS = ['001641.557eb261676548e58187f7c315450b8f.2313'];
 
 // Check and increment scan count for a user
 async function checkScanLimit(userId) {
   if (!userId) return { allowed: false, error: 'User ID required' };
+  if (UNLIMITED_USERS.includes(userId)) return { allowed: true, remaining: 999 };
 
   // Upsert user
   await pool.query(
