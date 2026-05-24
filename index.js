@@ -121,6 +121,52 @@ If no addresses found: []` }
   }
 });
 
+// Scan manifest (printed delivery list)
+app.post('/scanmanifest', async (req, res) => {
+  try {
+    const { image, mediaType } = req.body;
+    if (!image || !mediaType) return res.status(400).json({ error: 'Missing image or mediaType' });
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001', max_tokens: 2000,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: mediaType, data: image } },
+          { type: 'text', text: `Look at this image carefully. It is a printed delivery manifest with one address per line.
+
+Extract every street address from the list, top to bottom, in the exact order they appear.
+
+Important rules:
+1. If the same address appears multiple times consecutively, that means multiple packages for that address. Combine them into a single entry with the correct quantity.
+2. "address" — the full street address as printed (e.g. "49 PROSPECT ST"). Include apartment or unit numbers if present on the same line.
+3. "qty" — how many times that address appears consecutively in the list. If it appears once, qty is 1. If it appears twice in a row, qty is 2. And so on.
+4. "pickup" — always false for manifests.
+
+Output ONLY a raw JSON array of objects. No markdown, no explanation.
+
+Example: if the manifest shows:
+49 PROSPECT ST
+49 PROSPECT ST
+12 ELM AVE
+Output: [{"address":"49 PROSPECT ST","qty":2,"pickup":false},{"address":"12 ELM AVE","qty":1,"pickup":false}]
+
+If no addresses found: []` }
+        ]}]
+      })
+    });
+    const data = await response.json();
+    if (data.error) return res.status(400).json({ error: data.error.message });
+    const raw = data.content?.map(b => b.text || '').join('') || '';
+    const match = raw.match(/\[[\s\S]*\]/);
+    const parsed = JSON.parse(match ? match[0] : '[]');
+    res.json({ addresses: parsed });
+  } catch (err) {
+    console.error('Manifest scan error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Save route stats
 app.post('/stats', async (req, res) => {
   try {
