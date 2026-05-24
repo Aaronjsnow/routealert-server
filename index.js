@@ -48,10 +48,62 @@ async function initDB() {
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        last_seen TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS scan_usage (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        scan_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        scan_count INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(user_id, scan_date)
+      )
+    `);
     console.log('Database initialized successfully');
   } catch (err) {
     console.error('Database init error:', err);
   }
+}
+
+const DAILY_SCAN_LIMIT = 25;
+
+// Check and increment scan count for a user
+async function checkScanLimit(userId) {
+  if (!userId) return { allowed: false, error: 'User ID required' };
+
+  // Upsert user
+  await pool.query(
+    `INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO UPDATE SET last_seen = NOW()`,
+    [userId]
+  );
+
+  // Get or create today's scan count
+  const result = await pool.query(
+    `INSERT INTO scan_usage (user_id, scan_date, scan_count)
+     VALUES ($1, CURRENT_DATE, 1)
+     ON CONFLICT (user_id, scan_date)
+     DO UPDATE SET scan_count = scan_usage.scan_count + 1
+     RETURNING scan_count`,
+    [userId]
+  );
+
+  const count = result.rows[0].scan_count;
+  if (count > DAILY_SCAN_LIMIT) {
+    // Decrement since we over-incremented
+    await pool.query(
+      `UPDATE scan_usage SET scan_count = scan_count - 1 WHERE user_id = $1 AND scan_date = CURRENT_DATE`,
+      [userId]
+    );
+    return { allowed: false, error: `Daily scan limit of ${DAILY_SCAN_LIMIT} reached. Try again tomorrow.`, remaining: 0 };
+  }
+
+  return { allowed: true, remaining: DAILY_SCAN_LIMIT - count };
 }
 
 initDB();
@@ -78,8 +130,12 @@ app.get('/', (req, res) => {
 // Scan
 app.post('/scan', async (req, res) => {
   try {
-    const { image, mediaType } = req.body;
+    const { image, mediaType, userId } = req.body;
     if (!image || !mediaType) return res.status(400).json({ error: 'Missing image or mediaType' });
+
+    // Check scan limit
+    const limit = await checkScanLimit(userId);
+    if (!limit.allowed) return res.status(429).json({ error: limit.error, remaining: 0 });
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
@@ -128,8 +184,12 @@ If no addresses found: []` }
 // Scan manifest (printed delivery list)
 app.post('/scanmanifest', async (req, res) => {
   try {
-    const { image, mediaType } = req.body;
+    const { image, mediaType, userId } = req.body;
     if (!image || !mediaType) return res.status(400).json({ error: 'Missing image or mediaType' });
+
+    // Check scan limit
+    const limit = await checkScanLimit(userId);
+    if (!limit.allowed) return res.status(429).json({ error: limit.error, remaining: 0 });
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
@@ -302,6 +362,22 @@ app.delete('/stats/:id', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Delete stats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get remaining scans for today
+app.get('/scanlimit', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: 'Missing userId' });
+    const result = await pool.query(
+      `SELECT scan_count FROM scan_usage WHERE user_id = $1 AND scan_date = CURRENT_DATE`,
+      [userId]
+    );
+    const used = result.rows[0]?.scan_count || 0;
+    res.json({ used, remaining: Math.max(0, DAILY_SCAN_LIMIT - used), limit: DAILY_SCAN_LIMIT });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
