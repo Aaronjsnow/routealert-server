@@ -135,10 +135,10 @@ app.post('/scanmanifest', async (req, res) => {
           { type: 'image', source: { type: 'base64', media_type: mediaType, data: image } },
           { type: 'text', text: `You are parsing a USPS delivery manifest. Extract delivery stops as structured JSON.
 
-RULES:
-1. IGNORE the number at the far left of each row (stop sequence number).
-2. IGNORE any text after the address such as delivery notes or instructions.
-3. Each row is one PACKAGE. If the same address appears N times, that address gets packageCount: N.
+CRITICAL RULES:
+1. IGNORE ALL NUMBERS on each row — there may be a stop number, sequence number, or other numbers on the left side of each row. Ignore every single number. They are never package counts.
+2. The ONLY way to determine package count is if the SAME ADDRESS appears MORE THAN ONCE in the list. If an address appears once, packageCount is 1. If it appears twice, packageCount is 2. That is the ONLY rule for package count.
+3. IGNORE any text after the address such as delivery notes or instructions.
 4. Include apartment, unit, or suite numbers as part of streetAddress.
 5. City, state, and ZIP flow downward. The first line of the manifest always includes city/state/zip. Each city/state/zip applies to that address and all addresses below it until the next city/state/zip appears. Never look upward — process strictly top to bottom.
 6. Normalize addresses to title case (e.g. "103 Boyer Rd").
