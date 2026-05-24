@@ -58,7 +58,11 @@ initDB();
 
 // Normalize address for consistent matching
 function normalizeAddress(addr) {
-  return addr.toLowerCase().trim()
+  // Strip city/state/zip if present (everything after first comma)
+  let result = addr.toLowerCase().trim();
+  const commaIdx = result.indexOf(',');
+  if (commaIdx !== -1) result = result.substring(0, commaIdx).trim();
+  return result
     .replace(/\bstreet\b/g, 'st').replace(/\bavenue\b/g, 'ave')
     .replace(/\bdrive\b/g, 'dr').replace(/\broad\b/g, 'rd')
     .replace(/\blane\b/g, 'ln').replace(/\bcourt\b/g, 'ct')
