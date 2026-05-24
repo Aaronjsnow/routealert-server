@@ -133,25 +133,20 @@ app.post('/scanmanifest', async (req, res) => {
         model: 'claude-haiku-4-5-20251001', max_tokens: 2000,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: mediaType, data: image } },
-          { type: 'text', text: `Look at this image carefully. It is a printed delivery manifest with one address per line.
+          { type: 'text', text: `You are parsing a USPS delivery manifest. Extract delivery stops as structured JSON.
 
-Extract every street address from the list, top to bottom, in the exact order they appear.
+RULES:
+1. IGNORE the number at the far left of each row (stop sequence number).
+2. IGNORE any text after the address such as delivery notes or instructions.
+3. Each row is one PACKAGE. If the same address appears N times, that address gets packageCount: N.
+4. Include apartment, unit, or suite numbers as part of streetAddress.
+5. City, state, and ZIP flow downward. The first line of the manifest always includes city/state/zip. Each city/state/zip applies to that address and all addresses below it until the next city/state/zip appears. Never look upward — process strictly top to bottom.
+6. Normalize addresses to title case (e.g. "103 Boyer Rd").
+7. De-duplicate addresses and sum their package counts.
+8. If the page is partially visible, extract what you can see.
 
-Important rules:
-1. If the same address appears multiple times consecutively, that means multiple packages for that address. Combine them into a single entry with the correct quantity.
-2. "address" — the full street address as printed (e.g. "49 PROSPECT ST"). Include apartment or unit numbers if present on the same line.
-3. "qty" — how many times that address appears consecutively in the list. If it appears once, qty is 1. If it appears twice in a row, qty is 2. And so on.
-4. "pickup" — always false for manifests.
-
-Output ONLY a raw JSON array of objects. No markdown, no explanation.
-
-Example: if the manifest shows:
-49 PROSPECT ST
-49 PROSPECT ST
-12 ELM AVE
-Output: [{"address":"49 PROSPECT ST","qty":2,"pickup":false},{"address":"12 ELM AVE","qty":1,"pickup":false}]
-
-If no addresses found: []` }
+Return ONLY a JSON array, no explanation, no markdown:
+[{"streetAddress":"103 Boyer Rd","city":"Tolland","state":"CT","zip":"06084","packageCount":2}]` }
         ]}]
       })
     });
@@ -160,7 +155,21 @@ If no addresses found: []` }
     const raw = data.content?.map(b => b.text || '').join('') || '';
     const match = raw.match(/\[[\s\S]*\]/);
     const parsed = JSON.parse(match ? match[0] : '[]');
-    res.json({ addresses: parsed });
+
+    // Convert to RouteAlert address format
+    const addresses = parsed.map(item => {
+      const parts = [item.streetAddress, item.city, item.state, item.zip].filter(Boolean);
+      return {
+        address: item.streetAddress,
+        qty: item.packageCount || 1,
+        pickup: false,
+        city: item.city || null,
+        state: item.state || null,
+        zip: item.zip || null
+      };
+    });
+
+    res.json({ addresses });
   } catch (err) {
     console.error('Manifest scan error:', err);
     res.status(500).json({ error: err.message });
