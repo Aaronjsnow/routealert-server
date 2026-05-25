@@ -55,6 +55,8 @@ async function initDB() {
     await pool.query(`
       ALTER TABLE route_stats ADD COLUMN IF NOT EXISTS route_type TEXT DEFAULT 'usps'
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         email TEXT,
         created_at TIMESTAMP DEFAULT NOW(),
