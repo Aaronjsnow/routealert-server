@@ -53,7 +53,8 @@ async function initDB() {
       ALTER TABLE mailbox_pins ADD COLUMN IF NOT EXISTS zip TEXT
     `);
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
+      ALTER TABLE route_stats ADD COLUMN IF NOT EXISTS route_type TEXT DEFAULT 'usps'
+    `);
         id TEXT PRIMARY KEY,
         email TEXT,
         created_at TIMESTAMP DEFAULT NOW(),
@@ -270,11 +271,11 @@ Return ONLY a JSON array with one entry per row, no deduplication, no explanatio
 // Save route stats
 app.post('/stats', async (req, res) => {
   try {
-    const { date, total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages, hands_free } = req.body;
+    const { date, total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages, hands_free, route_type } = req.body;
     if (total_stops === undefined) return res.status(400).json({ error: 'Missing fields' });
     await pool.query(
-      `INSERT INTO route_stats (date, total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages, hands_free) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [date || new Date().toISOString().split('T')[0], total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages, hands_free || false]
+      `INSERT INTO route_stats (date, total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages, hands_free, route_type) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [date || new Date().toISOString().split('T')[0], total_stops, total_packages, mailbox_count, mailbox_packages, door_count, door_packages, hands_free || false, route_type || 'usps']
     );
     res.json({ success: true });
   } catch (err) {
