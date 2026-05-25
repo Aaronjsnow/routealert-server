@@ -45,8 +45,12 @@ async function initDB() {
         address TEXT NOT NULL UNIQUE,
         lat DOUBLE PRECISION NOT NULL,
         lng DOUBLE PRECISION NOT NULL,
+        zip TEXT,
         created_at TIMESTAMP DEFAULT NOW()
       )
+    `);
+    await pool.query(`
+      ALTER TABLE mailbox_pins ADD COLUMN IF NOT EXISTS zip TEXT
     `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -298,14 +302,14 @@ app.get('/stats', async (req, res) => {
 // Save mailbox pin
 app.post('/mailboxpin', async (req, res) => {
   try {
-    const { address, lat, lng } = req.body;
+    const { address, lat, lng, zip } = req.body;
     if (!address || lat == null || lng == null) return res.status(400).json({ error: 'Missing fields' });
     const normalized = normalizeAddress(address);
     await pool.query(
-      `INSERT INTO mailbox_pins (address, lat, lng)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (address) DO UPDATE SET lat = $2, lng = $3`,
-      [normalized, lat, lng]
+      `INSERT INTO mailbox_pins (address, lat, lng, zip)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (address) DO UPDATE SET lat = $2, lng = $3, zip = $4`,
+      [normalized, lat, lng, zip || null]
     );
     res.json({ success: true, normalized, lat, lng });
   } catch (err) {
@@ -313,10 +317,19 @@ app.post('/mailboxpin', async (req, res) => {
   }
 });
 
-// Get all mailbox pins
+// Get mailbox pins — filter by zip if provided
 app.get('/mailboxpin', async (req, res) => {
   try {
-    const result = await pool.query(`SELECT * FROM mailbox_pins ORDER BY address ASC`);
+    const { zip } = req.query;
+    let result;
+    if (zip) {
+      result = await pool.query(
+        `SELECT * FROM mailbox_pins WHERE zip = $1 ORDER BY address ASC`,
+        [zip]
+      );
+    } else {
+      result = await pool.query(`SELECT * FROM mailbox_pins ORDER BY address ASC`);
+    }
     res.json({ pins: result.rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
