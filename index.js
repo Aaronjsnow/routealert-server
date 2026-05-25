@@ -53,7 +53,7 @@ async function initDB() {
       ALTER TABLE mailbox_pins ADD COLUMN IF NOT EXISTS zip TEXT
     `);
     await pool.query(`
-      ALTER TABLE route_stats ADD COLUMN IF NOT EXISTS route_type TEXT DEFAULT 'usps'
+      ALTER TABLE route_stats ADD COLUMN IF NOT EXISTS route_type TEXT DEFAULT 'mail'
     `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
