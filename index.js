@@ -139,7 +139,7 @@ app.get('/', (req, res) => {
 // Scan
 app.post('/scan', async (req, res) => {
   try {
-    const { image, mediaType, userId } = req.body;
+    const { image, mediaType, userId, zip } = req.body;
     if (!image || !mediaType) return res.status(400).json({ error: 'Missing image or mediaType' });
 
     // Check scan limit
@@ -182,7 +182,10 @@ If no addresses found: []` }
       if (item.pickup === true) return false;
       const text = (typeof item === 'string' ? item : item.address) || '';
       return !/pickup/i.test(text);
-    });
+    }).map(item => ({
+      ...item,
+      zip: zip || null   // attach zip silently to every stop for geocoding accuracy
+    }));
     res.json({ addresses: filtered });
   } catch (err) {
     console.error('Scan error:', err);
