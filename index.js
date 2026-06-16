@@ -109,7 +109,7 @@ async function checkScanLimit(userId) {
       `UPDATE scan_usage SET scan_count = scan_count - 1 WHERE user_id = $1 AND scan_date = CURRENT_DATE`,
       [userId]
     );
-    return { allowed: false, error: `Daily scan limit of ${DAILY_SCAN_LIMIT} reached. Try again tomorrow.`, remaining: 0 };
+    return { allowed: false, error: `You've used all ${DAILY_SCAN_LIMIT} scans for today. Your scans reset at midnight.`, remaining: 0 };
   }
 
   return { allowed: true, remaining: DAILY_SCAN_LIMIT - count };
@@ -347,30 +347,6 @@ app.delete('/mailboxpin/:id', async (req, res) => {
   try {
     await pool.query(`DELETE FROM mailbox_pins WHERE id = $1`, [req.params.id]);
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Mailbox locations (in-memory for now)
-const mailboxLocations = {};
-app.post('/mailbox', async (req, res) => {
-  try {
-    const { address, lat, lng } = req.body;
-    if (!address || !lat || !lng) return res.status(400).json({ error: 'Missing fields' });
-    mailboxLocations[address.toLowerCase().trim()] = { lat, lng };
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-app.get('/mailbox', async (req, res) => {
-  try {
-    const { address } = req.query;
-    if (!address) return res.status(400).json({ error: 'Missing address' });
-    const location = mailboxLocations[address.toLowerCase().trim()];
-    if (!location) return res.status(404).json({ error: 'Not found' });
-    res.json(location);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
